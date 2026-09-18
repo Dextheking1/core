@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, call
 from chip.clusters import Objects as clusters
 from matter_server.client.models.node import MatterNode
 from matter_server.common.helpers.util import create_attribute_path_from_attribute
+from matter_server.common.models import EventType
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
@@ -332,3 +333,48 @@ async def test_async_boost_actions(
         ),
     )
     matter_client.send_device_command.reset_mock()
+
+
+@pytest.mark.parametrize("node_fixture", ["silabs_water_heater"])
+async def test_water_heater_missing_boost_state(
+    hass: HomeAssistant,
+    matter_client: MagicMock,
+    matter_node: MatterNode,
+) -> None:
+    """Test a device that never reports the optional BoostState attribute.
+
+    BoostState is optional in the schema. When absent, the read path returns
+    the dataclass default (0), which collides with the valid
+    BoostStateEnum.kInactive value, so a missing attribute used to read as an
+    inactive boost. See #182557.
+    """
+    # A non-conformant device activates a boost but never reports the
+    # optional BoostState attribute. Model the active value arriving through a
+    # different path while the attribute itself stays unreported.
+    boost_path = create_attribute_path_from_attribute(
+        endpoint_id=2,
+        attribute=clusters.WaterHeaterManagement.Attributes.BoostState,
+    )
+    set_node_attribute(
+        matter_node,
+        2,
+        # WaterHeaterManagement cluster id is 0x0094 = 148
+        0x0094,
+        clusters.WaterHeaterManagement.Attributes.BoostState.attribute_id,
+        int(clusters.WaterHeaterManagement.Enums.BoostStateEnum.kActive),
+    )
+    # Then drop the attribute from the reported set, so has_attribute() is
+    # false while the cluster instance still holds the active value.
+    matter_node.node_data.attributes.pop(boost_path, None)
+    await trigger_subscription_callback(
+        hass,
+        matter_client,
+        EventType.ATTRIBUTE_UPDATED,
+    )
+
+    state = hass.states.get("water_heater.water_heater")
+    assert state
+    # The entity must not claim boost is active from a value the device never
+    # reported.
+    assert state.state != STATE_HIGH_DEMAND
+    assert state.state == STATE_ECO

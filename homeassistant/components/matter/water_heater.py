@@ -177,9 +177,18 @@ class MatterWaterHeater(MatterEntity, WaterHeaterEntity):
         system_mode = self.get_matter_attribute_value(
             clusters.Thermostat.Attributes.SystemMode
         )
-        boost_state = self.get_matter_attribute_value(
-            clusters.WaterHeaterManagement.Attributes.BoostState
-        )
+        # BoostState is an optional attribute. When the device never reports
+        # it, get_matter_attribute_value returns the dataclass default (0),
+        # which is the valid BoostStateEnum.kInactive value, so a missing
+        # attribute would silently read as an inactive boost. Only trust the
+        # value when the attribute is actually present.
+        boost_state = None
+        if self._endpoint.has_attribute(
+            None, clusters.WaterHeaterManagement.Attributes.BoostState
+        ):
+            boost_state = self.get_matter_attribute_value(
+                clusters.WaterHeaterManagement.Attributes.BoostState
+            )
         if system_mode == clusters.Thermostat.Enums.SystemModeEnum.kOff:
             self._attr_current_operation = STATE_OFF
         elif boost_state == clusters.WaterHeaterManagement.Enums.BoostStateEnum.kActive:
